@@ -1,8 +1,9 @@
-﻿using System.Collections.Generic;
+﻿using DevBasics.CarManagement.Interfaces;
+using System.Collections.Generic;
 
 namespace DevBasics.CarManagement.Dependencies
 {
-    public class RegisterCarsModel
+    public class RegisterCarsModel : IRegisterCarsModel
     {
         public string VendorId { get; set; }
         public string CompanyId { get; set; }

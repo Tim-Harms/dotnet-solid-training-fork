@@ -1,5 +1,9 @@
 ﻿using AutoMapper;
+using DevBasics.CarManagement.CarManagement;
 using DevBasics.CarManagement.Dependencies;
+using DevBasics.CarManagement.Interfaces;
+using DevBasics.CarManagement.Settings;
+using DevBasics.CarManagement.Transaction;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -7,22 +11,26 @@ using System.Linq;
 using System.Threading.Tasks;
 using static DevBasics.CarManagement.Dependencies.RegistrationApiResponseBase;
 
-namespace DevBasics.CarManagement
+namespace DevBasics.CarManagement.Services
 {
-    public class CarManagementService : BaseService
+    public class CarManagementService : BaseService, ICarManagementService
     {
         private readonly IMapper _mapper;
+        private IBeginTransaction BeginTransaction;
+        private ICarPoolNumberHelper CarPoolNumberHelper;
 
         public CarManagementService(
             IMapper mapper,
-            CarManagementSettings settings,
-            HttpHeaderSettings httpHeader,
+            ICarManagementSettings settings,
+            IHttpHeaderSettings httpHeader,
             IKowoLeasingApiClient apiClient,
             ITransactionStateService transactionStateService,
             IBulkRegistrationService bulkRegisterService,
             IRegistrationDetailService registrationDetailService,
             ILeasingRegistrationRepository registrationRepository,
-            ICarRegistrationRepository carRegistrationRepository)
+            ICarRegistrationRepository carRegistrationRepository,
+            IBeginTransaction beginTransaction,
+            ICarPoolNumberHelper carPoolNumberHelper)
                 : base(settings, httpHeader, apiClient,
                       transactionStateService: transactionStateService,
                       bulkRegistrationService: bulkRegisterService,
@@ -31,8 +39,9 @@ namespace DevBasics.CarManagement
                       carLeasingRepository: carRegistrationRepository)
         {
             Console.WriteLine($"Initializing service {nameof(CarManagementService)}");
-
+            BeginTransaction = beginTransaction;
             _mapper = mapper;
+            CarPoolNumberHelper = carPoolNumberHelper;
         }
 
         public async Task<ServiceResult> RegisterCarsAsync(RegisterCarsModel registerCarsModel, bool isForcedRegistration, Claims claims, string identity = "Unknown")
@@ -146,7 +155,7 @@ namespace DevBasics.CarManagement
 
                     bool hasMissingData = HasMissingData(registerCarsModel.Cars.FirstOrDefault());
 
-                    string transactionId = await BeginTransactionGenerateId(
+                    string transactionId = await BeginTransaction.BeginTransactionGenerateId(
                                             registerCarsModel.Cars.Select(x => x.VehicleIdentificationNumber).ToList(),
                                             registerCarsModel.CustomerId,
                                             registerCarsModel.CompanyId,
@@ -276,11 +285,11 @@ namespace DevBasics.CarManagement
 
         public bool HasMissingData(CarRegistrationModel car)
         {
-            return (string.IsNullOrWhiteSpace(car.CompanyId))
-                        || (string.IsNullOrWhiteSpace(car.VehicleIdentificationNumber))
-                            || (string.IsNullOrWhiteSpace(car.CustomerId))
+            return string.IsNullOrWhiteSpace(car.CompanyId)
+                        || string.IsNullOrWhiteSpace(car.VehicleIdentificationNumber)
+                            || string.IsNullOrWhiteSpace(car.CustomerId)
                                 || car.DeliveryDate == null
-                                    || (string.IsNullOrWhiteSpace(car.ErpDeliveryNumber));
+                                    || string.IsNullOrWhiteSpace(car.ErpDeliveryNumber);
         }
 
         private async Task<BulkRegistrationRequest> MapToModel(RegistrationType registrationType, RegisterCarsModel cars, string transactionId)
@@ -290,7 +299,7 @@ namespace DevBasics.CarManagement
 
             try
             {
-                requestModel.RequestContext = await base.InitializeRequestContextAsync();
+                requestModel.RequestContext = await InitializeRequestContextAsync();
 
                 requestModel.TransactionId = transactionId;
                 requestModel.CompanyId = cars.CompanyId;
@@ -396,90 +405,10 @@ namespace DevBasics.CarManagement
             return deliveryGroups;
         }
 
-        private async Task<string> BeginTransactionGenerateId(IList<string> cars,
-            string customerId, string companyId, RegistrationType registrationType, string identity, string registrationNumber = null)
-        {
-            Console.WriteLine(
-                $"Trying to generate internal database transaction and initialize the transaction. Cars: {string.Join(",  ", cars)} ");
+        
 
-            try
-            {
-                string transactionId = DateTime.Now.Ticks.ToString();
-                if (transactionId.Length > 32)
-                {
-                    transactionId = transactionId.Substring(0, 32);
-                }
-
-                return await BeginTransactionAsync(cars, customerId, companyId, registrationType, identity, transactionId, registrationNumber);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Generating internal Transaction ID and initializing transaction failed. Cars: {string.Join(", ", cars)}: {ex}");
-
-                throw ex;
-            }
-        }
-
-        private async Task<string> BeginTransactionAsync(IList<string> cars,
-            string customerId, string companyId, RegistrationType registrationType, string identity,
-            string transactionId = null, string registrationNumber = null)
-        {
-            Console.WriteLine(
-                $"Trying to begin internal database transaction. Cars: {string.Join(",  ", cars)}");
-
-            try
-            {
-                IList<CarRegistrationDto> dbCarsToUpdate = await CarLeasingRepository.GetCarsAsync(cars);
-                foreach (CarRegistrationDto carToUpdate in dbCarsToUpdate)
-                {
-                    if (!string.IsNullOrWhiteSpace(transactionId))
-                    {
-                        carToUpdate.TransactionId = transactionId;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(registrationNumber))
-                    {
-                        carToUpdate.CarPoolNumber = registrationNumber;
-                    }
-
-                    carToUpdate.TransactionEndDate = null;
-                    carToUpdate.ErrorMessage = string.Empty;
-                    carToUpdate.ErrorCode = null;
-
-                    carToUpdate.TransactionType = (int)registrationType;
-                    //carToUpdate.TransactionState = (int)TransactionResult.Progress;
-                    carToUpdate.TransactionState = carToUpdate.TransactionState ?? (int)TransactionResult.NotRegistered;
-
-                    Console.WriteLine(
-                        $"Car hasn't got missing data. Setting status to {carToUpdate.TransactionState}");
-
-                    carToUpdate.TransactionStartDate = DateTime.Now;
-
-                    Console.WriteLine(
-                        $"Trying to update car {carToUpdate.CarIdentificationNumber} in database...");
-
-                    await LeasingRegistrationRepository.UpdateCarAsync(carToUpdate);
-                    await LeasingRegistrationRepository.InsertHistoryAsync(carToUpdate,
-                        identity,
-                        ((carToUpdate.TransactionState.HasValue) ? Enum.GetName(typeof(TransactionResult), (int)carToUpdate.TransactionState) : null),
-                        ((carToUpdate.TransactionType.HasValue) ? Enum.GetName(typeof(RegistrationType), (int)carToUpdate.TransactionType) : null)
-                    );
-                }
-
-                Console.WriteLine(
-                        $"Beginning internal database transaction ended. Cars: {string.Join(",  ", cars)}, " +
-                        $"Returning internal Transaction ID: {transactionId}");
-
-                return transactionId;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Beginning internal database transaction failed. Cars: {string.Join(",  ", cars)}: {ex}");
-
-                throw new Exception("Beginning internal database transaction failed", ex);
-            }
-        }
-
+        
+        //TODO Analog zu BeginMeasurement auslagern
         private async Task<IList<int>> FinishTransactionAsync(RegistrationType registrationType,
             BulkRegistrationResponse apiResponse, IList<string> carIdentifier, string companyId, string identity,
             string transactionStateBackup = null, BulkRegistrationRequest requestModel = null)
@@ -500,7 +429,7 @@ namespace DevBasics.CarManagement
                     dbCar.CompanyId = companyId;
 
                     TransactionResult newTransactionState = await GetTransactionResult(apiResponse, dbCar, registrationType, transactionStateBackup);
-                    string parsedTransactionStateBackup = Enum.GetName(typeof(TransactionResult), (!string.IsNullOrWhiteSpace(transactionStateBackup))
+                    string parsedTransactionStateBackup = Enum.GetName(typeof(TransactionResult), !string.IsNullOrWhiteSpace(transactionStateBackup)
                                                         ? int.Parse(transactionStateBackup)
                                                         : (int)TransactionResult.None);
 
@@ -509,9 +438,9 @@ namespace DevBasics.CarManagement
 
                     if (apiResponse != null)
                     {
-                        if ((newTransactionState.ToString() == parsedTransactionStateBackup && apiResponse.Response != "SUCCESS")
+                        if (newTransactionState.ToString() == parsedTransactionStateBackup && apiResponse.Response != "SUCCESS"
                                 || newTransactionState == TransactionResult.Failed
-                                    || (newTransactionState == TransactionResult.NotRegistered && dbCar.TransactionType != (int)RegistrationType.Unregister))
+                                    || newTransactionState == TransactionResult.NotRegistered && dbCar.TransactionType != (int)RegistrationType.Unregister)
                         {
                             Console.WriteLine(
                                 $"An error occured or the transaction could not be processed (new transaction status is the old transaction status from car logs)." +
@@ -527,7 +456,7 @@ namespace DevBasics.CarManagement
 
                             // if an error occurred or the transaction could not be processed (new transaction state is the old transaction state)
                             // close the transaction.
-                            dbCar.TransactionState = (newTransactionState != TransactionResult.None) ? (int?)newTransactionState : null;
+                            dbCar.TransactionState = newTransactionState != TransactionResult.None ? (int?)newTransactionState : null;
                             dbCar.TransactionEndDate = DateTime.Now;
                         }
                         else
@@ -699,7 +628,7 @@ namespace DevBasics.CarManagement
             if (carHistory != null)
             {
                 IOrderedEnumerable<CarRegistrationLogDto> sortedCarHistory = carHistory.OrderBy(d => d.RowCreationDate);
-                bool isInitialTransaction = (!sortedCarHistory.Any(x => x.TransactionState == TransactionResult.Registered.ToString()));
+                bool isInitialTransaction = !sortedCarHistory.Any(x => x.TransactionState == TransactionResult.Registered.ToString());
 
                 Console.WriteLine($"History of car {carIdentificationNumber} is not null, returning {isInitialTransaction}");
 
@@ -821,7 +750,7 @@ namespace DevBasics.CarManagement
                         else
                         {
                             rowCreationDate = carHistory?
-                                .Where(x => (string.IsNullOrWhiteSpace(x.TransactionType) || x.TransactionType != TransactionResult.Progress.ToString()))
+                                .Where(x => string.IsNullOrWhiteSpace(x.TransactionType) || x.TransactionType != TransactionResult.Progress.ToString())
                                 .FirstOrDefault()
                                 .RowCreationDate;
                         }

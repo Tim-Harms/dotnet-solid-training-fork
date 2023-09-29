@@ -1,4 +1,7 @@
-﻿using DevBasics.CarManagement.Dependencies;
+﻿using DevBasics.CarManagement.CarManagement;
+using DevBasics.CarManagement.Dependencies;
+using DevBasics.CarManagement.Interfaces;
+using DevBasics.CarManagement.Settings;
 using Newtonsoft.Json;
 using System;
 using System.Threading.Tasks;
@@ -7,9 +10,9 @@ namespace DevBasics.CarManagement
 {
     public class BaseService
     {
-        public CarManagementSettings Settings { get; set; }
+        public ICarManagementSettings Settings { get; set; }
 
-        public HttpHeaderSettings HttpHeader { get; set; }
+        public IHttpHeaderSettings HttpHeader { get; set; }
 
         public IKowoLeasingApiClient ApiClient { get; set; }
 
@@ -24,8 +27,8 @@ namespace DevBasics.CarManagement
         public ICarRegistrationRepository CarLeasingRepository { get; set; }
 
         public BaseService(
-            CarManagementSettings settings,
-            HttpHeaderSettings httpHeader,
+            ICarManagementSettings settings,
+            IHttpHeaderSettings httpHeader,
             IKowoLeasingApiClient apiClient,
             IBulkRegistrationService bulkRegistrationService = null,
             ITransactionStateService transactionStateService = null,

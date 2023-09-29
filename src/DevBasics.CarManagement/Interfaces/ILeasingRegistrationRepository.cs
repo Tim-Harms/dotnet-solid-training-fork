@@ -1,7 +1,7 @@
 ﻿using DevBasics.CarManagement.Dependencies;
 using System.Threading.Tasks;
 
-namespace DevBasics.CarManagement
+namespace DevBasics.CarManagement.Interfaces
 {
     public interface ILeasingRegistrationRepository
     {

@@ -1,8 +1,9 @@
-﻿using System.Collections.Generic;
+﻿using DevBasics.CarManagement.Interfaces;
+using System.Collections.Generic;
 
-namespace DevBasics.CarManagement
+namespace DevBasics.CarManagement.CarManagement
 {
-    public class CarManagementSettings
+    public class CarManagementSettings : ICarManagementSettings
     {
         public IDictionary<int, string> ApiEndpoints { get; set; } = new Dictionary<int, string>();
         public IDictionary<string, string> HttpHeaders { get; set; } = new Dictionary<string, string>();
